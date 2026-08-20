@@ -1,0 +1,5 @@
+﻿# Temporales
+checkpoints/
+logs/
+__pycache__/
+*.pyc
