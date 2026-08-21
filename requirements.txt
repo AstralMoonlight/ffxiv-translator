@@ -1,5 +1,2 @@
-﻿# Temporales
-checkpoints/
-logs/
-__pycache__/
-*.pyc
+﻿questionary
+nrequests
