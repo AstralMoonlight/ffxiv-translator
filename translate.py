@@ -188,12 +188,91 @@ def call_ollama(prompt: str, system: str, cfg: dict) -> str:
 # Parseo
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────
+# Patrones de contaminación conocidos
+# ─────────────────────────────────────────────
+
+# Rutas de sistema, artefactos de terminal, prefijos que el modelo no debería incluir
+_CONTAMINATION_PATTERNS: list[re.Pattern] = [
+    re.compile(r"[a-zA-Z]:[\\\/]"),                                    # rutas Windows: C:\... D:/...
+    re.compile(r"\/(?:home|mnt|tmp|var|usr|opt|root|output|input|checkpoints|logs)\/"),  # rutas Unix absolutas
+    re.compile(r"output\/.*\.json"),                                    # rutas de archivo JSON de salida
+    re.compile(r"\[(?:ssh|tmux|bash|root|nerv)\]", re.IGNORECASE),    # artefactos de terminal SSH/tmux
+    re.compile(r"(?:ssh|tmux)\b", re.IGNORECASE),                      # palabras ssh/tmux sueltas
+    re.compile(r"root@\S+"),                                           # prompt de shell root@host
+    re.compile(r"Translation:\s", re.IGNORECASE),                      # prefijo "Translation:" del modelo
+    re.compile(r"^(?:Here(?:'s| is)|Estas son|A continuación)\b", re.IGNORECASE),  # preámbulos no pedidos
+    re.compile(r"\x1b\["),                                             # secuencias de escape ANSI
+    re.compile(r"^```|```$"),                                          # delimitadores de bloque markdown
+]
+
+def sanitize_response(raw: str) -> str:
+    """
+    Limpia la respuesta del modelo antes de parsear.
+    Elimina líneas que contengan artefactos de terminal, rutas de archivo,
+    secuencias de escape o cualquier basura conocida que no sea traducción.
+    """
+    clean_lines = []
+    for line in raw.splitlines():
+        is_contaminated = any(p.search(line) for p in _CONTAMINATION_PATTERNS)
+        if not is_contaminated:
+            clean_lines.append(line)
+        # Si la línea estaba contaminada pero tenía formato N. texto,
+        # la reemplazamos por una línea vacía numerada para que el parser
+        # detecte el desajuste y dispare el fallback
+        else:
+            m = re.match(r"^\s*(\d+)\.", line)
+            if m:
+                clean_lines.append(f"{m.group(1)}. [CONTAMINADO]")
+    return "\n".join(clean_lines)
+
+
+def is_contaminated(text: str) -> bool:
+    """
+    Verifica si una línea ya parseada contiene contaminación residual.
+    Se usa para validar cada traducción individualmente tras el parseo.
+    """
+    if "[CONTAMINADO]" in text:
+        return True
+    return any(p.search(text) for p in _CONTAMINATION_PATTERNS)
+
+
+def validate_length(es: str, en: str) -> bool:
+    """
+    Detecta traducciones sospechosamente largas o cortas respecto al original.
+
+    Reglas empíricas para FFXIV:
+    - Una traducción al español es típicamente 10-40% más larga que el inglés.
+    - Si es más de 3x el largo del original → el modelo alucinó o repitió texto.
+    - Si está vacía o es menor al 20% del original → el modelo devolvió nada útil.
+    - Líneas muy cortas (< 10 chars) se eximen porque son objetivos/UI de una palabra.
+    """
+    len_en = len(en.strip())
+    len_es = len(es.strip())
+
+    if len_en < 10:
+        return True  # líneas muy cortas: no aplicar ratio (ej: "Speak with Miounne.")
+
+    if len_es == 0:
+        return False
+
+    ratio = len_es / len_en
+    return 0.2 <= ratio <= 3.0
+
+
 def parse_numbered(response: str, expected: int) -> list[str] | None:
+    # Primero sanitizar para eliminar basura de terminal antes de parsear
+    clean = sanitize_response(response)
     lines = []
-    for line in response.splitlines():
+    for line in clean.splitlines():
         m = re.match(r"^\s*\d+\.\s+(.+)", line)
         if m:
-            lines.append(m.group(1).strip())
+            text = m.group(1).strip()
+            # Una línea marcada como contaminada hace fallar el batch completo
+            # para que el fallback individual reintente cada entrada limpiamente
+            if text == "[CONTAMINADO]":
+                return None
+            lines.append(text)
     return lines if len(lines) == expected else None
 
 
@@ -281,12 +360,14 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
     def single(key, text):
         # El fallback también usa el mismo system_prompt con todas las reglas
         try:
-            out = call_ollama(
+            raw = call_ollama(
                 f"Traduce al español neutro esta línea de FFXIV. "
                 f"Mantén los nombres propios sin cambiar. Devuelve solo la traducción:\n{text}",
                 system_prompt, cfg
             )
-            return out if out.strip() else text
+            # Sanitizar también la respuesta del modo individual
+            clean = sanitize_response(raw).strip()
+            return clean if clean and not is_contaminated(clean) else text
         except Exception as e:
             print(f"\n[ERROR EN SINGLE]: {e}")
             return text
@@ -297,6 +378,25 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
     def postprocess(es: str) -> str:
         """Aplica correcciones post-traducción: restaura sustantivos propios alterados."""
         return restore_proper_nouns(es, restoration_map)
+
+    def validate_entry(key: str, en: str, es: str) -> tuple[str, str | None]:
+        """
+        Valida una entrada traducida contra tres criterios:
+        1. Contaminación: rutas, artefactos de terminal, prefijos no pedidos.
+        2. Longitud: ratio ES/EN fuera del rango esperado (0.2x – 3.0x).
+        3. Identidad: la traducción es igual al original en inglés.
+
+        Devuelve (reason, es_corregido_o_None).
+        - Si reason es None → entrada válida, usar es tal cual.
+        - Si reason no es None → se logueará; es puede ser None si hay que reintentar.
+        """
+        if is_contaminated(es):
+            return "contaminated", None
+        if not validate_length(es, en):
+            return "length_anomaly", None
+        if es.strip().lower() == en.strip().lower():
+            return "identical_to_source", None
+        return None, es  # sin problemas
 
     result = {}
     translated = try_batch(entries)
@@ -317,12 +417,28 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
 
     for (key, en), es in zip(entries, translated):
         es = postprocess(es)
-        if es.strip().lower() == en.strip().lower():
+        reason, valid_es = validate_entry(key, en, es)
+
+        if reason is not None:
+            # La entrada falló la validación: reintentar en modo individual
+            if reason != "identical_to_source":
+                print(f"  [!] {reason}: '{key}' → reintentando...")
             retry = postprocess(single(key, en))
-            if retry.strip().lower() != en.strip().lower():
-                es = retry
-            _log(log_path, batch_idx, [(key, en)], "identical_to_source", es)
-        result[key] = es
+            retry_reason, retry_valid = validate_entry(key, en, retry)
+
+            if retry_reason is None:
+                # El reintento es válido
+                result[key] = retry_valid
+                _log(log_path, batch_idx, [(key, en)], f"{reason}_recovered", retry_valid)
+            else:
+                # El reintento también falló: guardar el original en inglés como fallback seguro
+                # y loggear para revisión manual
+                print(f"  [!!] Reintento también fallido ({retry_reason}): '{key}' → guardando original EN")
+                result[key] = en
+                _log(log_path, batch_idx, [(key, en)], f"{reason}_unrecovered", retry)
+        else:
+            result[key] = valid_es
+
     return result
 
 def _log(log_path, batch_idx, entries, reason, output=""):
