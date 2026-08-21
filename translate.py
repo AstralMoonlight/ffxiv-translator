@@ -811,6 +811,7 @@ def main():
                 print(f"\n  [Error] {e}")
             print()
         print("  Traducción finalizada.")
+        
     else:
         show_menu(cfg, input_root, glossary_data)
 
