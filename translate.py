@@ -14,9 +14,9 @@ def load_config() -> dict:
     config = {
         "OLLAMA_URL":       "http://localhost:11434",
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
-        "BATCH_SIZE":       10,
+        "BATCH_SIZE":       15,
         "CHECKPOINT_EVERY": 10,
-        "TEMPERATURE":      0.1,  # Temperatura baja para acatar reglas, pero sin romper gramática
+        "TEMPERATURE":      0.3,  # Temperatura baja para acatar reglas, pero sin romper gramática
     }
     env_path = Path(__file__).parent / "config.env"
     if env_path.is_file():
