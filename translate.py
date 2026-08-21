@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import urllib.request
 from pathlib import Path
 from datetime import datetime
 
@@ -30,7 +31,6 @@ def load_config() -> dict:
     config["TEMPERATURE"]      = float(config["TEMPERATURE"])
     return config
 
-
 # ─────────────────────────────────────────────
 # Detección de tipo
 # ─────────────────────────────────────────────
@@ -52,7 +52,6 @@ def detect_file_type(filename: str) -> str | None:
     if "system_message" in name: return "ui"
     return None
 
-
 # ─────────────────────────────────────────────
 # Glosario
 # ─────────────────────────────────────────────
@@ -73,7 +72,6 @@ def load_glossary(glossary_path: Path) -> str:
     except Exception as e:
         print(f"  [Error] Glosario: {e}")
         return ""
-
 
 # ─────────────────────────────────────────────
 # System prompts
@@ -116,15 +114,12 @@ REGLAS GENERALES:
         f"{block}\n\n{base}"
     )
 
-
 # ─────────────────────────────────────────────
-# Ollama
+# Ollama (Actualizado con urllib y diagnósticos)
 # ─────────────────────────────────────────────
 
 def call_ollama(prompt: str, system: str, cfg: dict) -> str:
-    import requests
     url = cfg["OLLAMA_URL"].rstrip("/") + "/api/chat"
-    
     payload = {
         "model": cfg["MODEL_NAME"],
         "messages": [
@@ -139,10 +134,18 @@ def call_ollama(prompt: str, system: str, cfg: dict) -> str:
         }
     }
     
-    r = requests.post(url, json=payload, timeout=300)
-    r.raise_for_status()
-    return r.json().get("message", {}).get("content", "").strip()
-
+    try:
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode('utf-8'), 
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req, timeout=300) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get("message", {}).get("content", "").strip()
+    except Exception as e:
+        print(f"\n[ERROR CRÍTICO EN OLLAMA]: {e}")
+        raise
 
 # ─────────────────────────────────────────────
 # Parseo
@@ -156,9 +159,8 @@ def parse_numbered(response: str, expected: int) -> list[str] | None:
             lines.append(m.group(1).strip())
     return lines if len(lines) == expected else None
 
-
 # ─────────────────────────────────────────────
-# Batch con fallback
+# Batch con fallback (Actualizado con diagnósticos)
 # ─────────────────────────────────────────────
 
 def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
@@ -172,8 +174,12 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
         )
         try:
             raw = call_ollama(prompt, system_prompt, cfg)
-            return parse_numbered(raw, len(items))
-        except Exception:
+            parsed = parse_numbered(raw, len(items))
+            if parsed is None:
+                print(f"\n[ADVERTENCIA] Falló el parseo. El modelo respondió:\n{raw}\n")
+            return parsed
+        except Exception as e:
+            print(f"\n[ERROR EN BATCH]: {e}")
             return None
 
     def single(key, text):
@@ -183,15 +189,18 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
                 system_prompt, cfg
             )
             return out if out.strip() else text
-        except Exception:
+        except Exception as e:
+            print(f"\n[ERROR EN SINGLE]: {e}")
             return text
 
     result = {}
     translated = try_batch(entries)
     if translated is None:
+        print("  Reintentando batch en 1 segundo...")
         time.sleep(1)
         translated = try_batch(entries)
     if translated is None and len(entries) > 1:
+        print("  Dividiendo el batch a la mitad...")
         mid = len(entries) // 2
         a, b = try_batch(entries[:mid]), try_batch(entries[mid:])
         translated = (a + b) if (a and b) else None
@@ -210,7 +219,6 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
         result[key] = es
     return result
 
-
 def _log(log_path, batch_idx, entries, reason, output=""):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as f:
@@ -219,7 +227,6 @@ def _log(log_path, batch_idx, entries, reason, output=""):
                 "ts": datetime.now().isoformat(), "batch": batch_idx,
                 "key": key, "en": text, "es": output, "reason": reason
             }, ensure_ascii=False) + "\n")
-
 
 # ─────────────────────────────────────────────
 # Checkpoint
@@ -245,7 +252,6 @@ def load_checkpoint(path: Path) -> dict:
 def save_checkpoint(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 # ─────────────────────────────────────────────
 # Progreso de un archivo (para el menú)
@@ -281,7 +287,6 @@ def get_file_progress(input_path: Path) -> tuple[int, int]:
             pass
 
     return 0, total
-
 
 # ─────────────────────────────────────────────
 # Traducción de un archivo
@@ -386,7 +391,6 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
 
     print(f"\n  ✓ {output_path.relative_to(base)}")
 
-
 # ─────────────────────────────────────────────
 # Menú interactivo
 # ─────────────────────────────────────────────
@@ -436,7 +440,6 @@ def build_menu_items(input_root: Path) -> list[dict]:
 
     return items
 
-
 def show_menu(cfg: dict, input_root: Path, glossary_text: str):
     try:
         import questionary
@@ -461,7 +464,6 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
         print("=" * 65)
 
         choices = []
-
         choices.append(Choice(
             title=f"  ★ Todo el catálogo        [{total_done:,}/{total_keys:,}]",
             value="__ALL__"
@@ -548,7 +550,6 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
 
         input("  [Enter para volver al menú]")
 
-
 # ─────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────
@@ -592,7 +593,6 @@ def main():
         print("  Traducción finalizada.")
     else:
         show_menu(cfg, input_root, glossary_text)
-
 
 if __name__ == "__main__":
     main()
