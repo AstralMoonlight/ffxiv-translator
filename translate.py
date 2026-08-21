@@ -56,16 +56,21 @@ def detect_file_type(filename: str) -> str | None:
 # Glosario Dinámico
 # ─────────────────────────────────────────────
 
-def load_glossary(glossary_path: Path) -> dict:
-    """Carga el glosario como diccionario en lugar de texto plano."""
+def load_glossary(glossary_path: Path) -> str:
     if not glossary_path.is_file():
-        return {}
+        return "No se proporcionaron términos específicos. Mantén todos los nombres propios intactos."
     try:
-        return json.loads(glossary_path.read_text(encoding="utf-8"))
+        data = json.loads(glossary_path.read_text(encoding="utf-8"))
+        lines = []
+        for category, mapping in data.items():
+            for src, tgt in mapping.items():
+                # Usamos reemplazo directo positivo para evitar problemas con negativos
+                lines.append(f'- "{src}" → "{tgt}"')
+        return "\n".join(lines)
     except Exception as e:
         print(f"  [Error] Glosario: {e}")
-        return {}
-
+        return ""
+    
 def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
     """Filtra el glosario para inyectar solo los términos presentes en el batch actual."""
     if not glossary_data:
