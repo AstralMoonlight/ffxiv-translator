@@ -16,7 +16,7 @@ def load_config() -> dict:
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
         "BATCH_SIZE":       25,
         "CHECKPOINT_EVERY": 10,
-        "TEMPERATURE":      0,
+        "TEMPERATURE":      0.1,  # Temperatura baja para acatar reglas, pero sin romper gramática
     }
     env_path = Path(__file__).parent / "config.env"
     if env_path.is_file():
@@ -77,10 +77,8 @@ def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
     for category, mapping in glossary_data.items():
         for src, tgt in mapping.items():
             if src.lower() in combined_text:
-                if src != tgt:
-                    lines.append(f'- "{src}" → "{tgt}"')
-                else:
-                    lines.append(f'- "{src}" → NO TRADUCIR')
+                # Instrucción positiva absoluta (hack para que no traduzca)
+                lines.append(f'- "{src}" → "{tgt}"')
                     
     if not lines:
         return "No hay términos del glosario en este bloque. Traduce normalmente."
@@ -91,14 +89,13 @@ def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
 # ─────────────────────────────────────────────
 
 def build_system_prompt(file_type: str, relevant_glossary: str) -> str:
-    base = f"""GLOSARIO PARA ESTE TEXTO (aplica siempre, sin excepción):
+    base = f"""GLOSARIO PARA ESTE TEXTO (aplica siempre, reemplazo exacto):
 {relevant_glossary}
 
-REGLAS ESTRICTAS DE LOCALIZACIÓN (¡NO TRADUZCAS LITERALMENTE!):
+REGLAS ESTRICTAS DE LOCALIZACIÓN:
 - Estás haciendo LOCALIZACIÓN PROFESIONAL, no traducción palabra por palabra. 
-- Adapta modismos, dichos y expresiones al español neutro según el contexto (ej. "green adventurer" -> "aventurero novato", "bisoño" o "novicio"; NUNCA "aventurero verde").
+- Adapta modismos, dichos y expresiones al español neutro según el contexto.
 - Mantén un vocabulario rico, natural y con tono de fantasía épica.
-- Si encuentras términos propios de Final Fantasy XIV (ej. unidades de medida como ilm, yalm, malm) mantenlos intactos a menos que estén en el glosario.
 - Devuelve ÚNICAMENTE las líneas traducidas en el formato numerado indicado.
 - Sin explicaciones, notas, comentarios ni formato extra.
 - Nunca traduzcas comandos que comiencen con / (ej: /wave, /stretch).
