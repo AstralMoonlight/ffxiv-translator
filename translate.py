@@ -16,7 +16,7 @@ def load_config() -> dict:
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
         "BATCH_SIZE":       15,
         "CHECKPOINT_EVERY": 10,
-        "TEMPERATURE":      0.6,  # Temperatura baja para acatar reglas, pero sin romper gramática
+        "TEMPERATURE":      0,  # Temperatura baja para acatar reglas, pero sin romper gramática
     }
     env_path = Path(__file__).parent / "config.env"
     if env_path.is_file():
@@ -56,21 +56,16 @@ def detect_file_type(filename: str) -> str | None:
 # Glosario Dinámico
 # ─────────────────────────────────────────────
 
-def load_glossary(glossary_path: Path) -> str:
+def load_glossary(glossary_path: Path) -> dict:
+    """Carga el glosario como diccionario en lugar de texto plano."""
     if not glossary_path.is_file():
-        return "No se proporcionaron términos específicos. Mantén todos los nombres propios intactos."
+        return {}
     try:
-        data = json.loads(glossary_path.read_text(encoding="utf-8"))
-        lines = []
-        for category, mapping in data.items():
-            for src, tgt in mapping.items():
-                # Usamos reemplazo directo positivo para evitar problemas con negativos
-                lines.append(f'- "{src}" → "{tgt}"')
-        return "\n".join(lines)
+        return json.loads(glossary_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"  [Error] Glosario: {e}")
-        return ""
-    
+        return {}
+
 def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
     """Filtra el glosario para inyectar solo los términos presentes en el batch actual."""
     if not glossary_data:
