@@ -123,20 +123,25 @@ REGLAS GENERALES:
 
 def call_ollama(prompt: str, system: str, cfg: dict) -> str:
     import requests
-    url = cfg["OLLAMA_URL"].rstrip("/") + "/api/generate"
-    # Se une el system prompt al prompt en un único campo: algunos modelos servidos
-    # por Ollama ignoran o manejan mal el campo "system" separado en /api/generate,
-    # lo que producía traducciones idénticas al original (texto en inglés sin tocar).
-    full_prompt = f"{system}\n\n{prompt}"
+    url = cfg["OLLAMA_URL"].rstrip("/") + "/api/chat"
+    
     payload = {
-        "model":  cfg["MODEL_NAME"],
-        "prompt": full_prompt,
+        "model": cfg["MODEL_NAME"],
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ],
         "stream": False,
-        "options": {"temperature": cfg["TEMPERATURE"], "top_p": 0.9, "num_predict": 4096}
+        "options": {
+            "temperature": cfg["TEMPERATURE"], 
+            "top_p": 0.9, 
+            "num_predict": 4096
+        }
     }
+    
     r = requests.post(url, json=payload, timeout=300)
     r.raise_for_status()
-    return r.json().get("response", "").strip()
+    return r.json().get("message", {}).get("content", "").strip()
 
 
 # ─────────────────────────────────────────────
@@ -198,8 +203,6 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
 
     for (key, en), es in zip(entries, translated):
         if es.strip().lower() == en.strip().lower():
-            # El modelo devolvió el texto sin traducir: se reintenta individualmente
-            # una vez antes de aceptar la línea como está.
             retry = single(key, en)
             if retry.strip().lower() != en.strip().lower():
                 es = retry
@@ -249,7 +252,6 @@ def save_checkpoint(path: Path, data: dict):
 # ─────────────────────────────────────────────
 
 def get_file_progress(input_path: Path) -> tuple[int, int]:
-    """Retorna (done, total) leyendo checkpoint o output existente."""
     base = Path(__file__).parent
     try:
         rel = input_path.relative_to(base / "input")
@@ -264,7 +266,6 @@ def get_file_progress(input_path: Path) -> tuple[int, int]:
     except Exception:
         return 0, 0
 
-    # Preferir checkpoint si existe (traducción en curso)
     if ckpt.is_file():
         try:
             done = len(json.loads(ckpt.read_text(encoding="utf-8")))
@@ -272,7 +273,6 @@ def get_file_progress(input_path: Path) -> tuple[int, int]:
         except Exception:
             pass
 
-    # Si hay output terminado
     if output_path.is_file():
         try:
             done = len(json.loads(output_path.read_text(encoding="utf-8")))
@@ -309,15 +309,11 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
         print(f"  Reanudando desde {done_before:,}/{total:,}...")
 
     def write_partial_output():
-        """Escribe el _es.json parcial en cada llamada: mezcla lo ya traducido
-        con el texto en inglés para las claves aún pendientes, respetando el
-        orden original del archivo."""
         ordered = {k: translated.get(k, en_data[k]) for k in en_data}
         output_path.write_text(
             json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    # Si ya existía progreso previo (checkpoint), reflejarlo de inmediato en el output
     if done_before:
         write_partial_output()
 
@@ -359,8 +355,6 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
         done_now += len(batch)
         preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
         render_bar(done_now, preview)
-        # Guardado incremental: el _es.json se actualiza después de CADA batch,
-        # no solo al terminar el archivo completo.
         write_partial_output()
         if batch_count % checkpoint_every == 0:
             save_checkpoint(ckpt, translated)
@@ -371,7 +365,6 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
         for batch in batches:
             run_batch(batch, system_prompt)
     else:
-        # Agrupar entradas consecutivas del mismo tipo
         groups: list[tuple[str, list]] = []
         for key, text in pending:
             etype = detect_entry_type(key)
@@ -386,7 +379,6 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
             for batch in batches:
                 run_batch(batch, system_prompt)
 
-    # Guardado final (ya está actualizado por run_batch, pero se asegura consistencia)
     write_partial_output()
 
     if ckpt.is_file():
@@ -400,11 +392,6 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
 # ─────────────────────────────────────────────
 
 def build_menu_items(input_root: Path) -> list[dict]:
-    """
-    Construye la lista de items para el menú:
-      - Una entrada por carpeta (categoría)
-      - Una entrada por archivo dentro de cada carpeta
-    """
     items = []
     for folder in sorted(input_root.rglob("*")):
         if not folder.is_dir():
@@ -413,7 +400,6 @@ def build_menu_items(input_root: Path) -> list[dict]:
         if not files:
             continue
 
-        # Calcular progreso de la categoría
         cat_done, cat_total = 0, 0
         for f in files:
             d, t = get_file_progress(f)
@@ -464,7 +450,6 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
     while True:
         items = build_menu_items(input_root)
 
-        # Calcular totales globales
         all_files  = list(input_root.rglob("*_en.json"))
         total_done = sum(get_file_progress(f)[0] for f in all_files)
         total_keys = sum(get_file_progress(f)[1] for f in all_files)
@@ -475,10 +460,8 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
         print(f"  Progreso global: {total_done:,}/{total_keys:,}  ({pct_global:.1f}%)")
         print("=" * 65)
 
-        # Construir choices
         choices = []
 
-        # Opción: todo el catálogo
         choices.append(Choice(
             title=f"  ★ Todo el catálogo        [{total_done:,}/{total_keys:,}]",
             value="__ALL__"
@@ -522,7 +505,6 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
         if selected == "__SEP__":
             continue
 
-        # Determinar archivos a traducir
         if selected == "__ALL__":
             files_to_run = sorted(input_root.rglob("*_en.json"))
             label = "todo el catálogo"
@@ -533,7 +515,6 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
             files_to_run = [selected["path"]]
             label = selected["label"].strip()
 
-        # Filtrar ya completos
         pending_files = []
         for f in files_to_run:
             done, total = get_file_progress(f)
@@ -592,7 +573,6 @@ def main():
     print(f"  Ollama : {cfg['OLLAMA_URL']}")
 
     if args.no_menu:
-        # Modo headless: procesar todo sin interacción
         files = sorted(input_root.rglob("*_en.json"))
         print(f"  Modo headless — {len(files)} archivos\n")
         for i, fpath in enumerate(files, 1):
