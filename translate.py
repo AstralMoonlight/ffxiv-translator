@@ -15,7 +15,7 @@ def load_config() -> dict:
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
         "BATCH_SIZE":       25,
         "CHECKPOINT_EVERY": 10,
-        "TEMPERATURE":      0,
+        "TEMPERATURE":      0.3,
     }
     env_path = Path(__file__).parent / "config.env"
     if env_path.is_file():
@@ -27,7 +27,7 @@ def load_config() -> dict:
             config[k.strip()] = v.strip()
     config["BATCH_SIZE"]       = int(config["BATCH_SIZE"])
     config["CHECKPOINT_EVERY"] = int(config["CHECKPOINT_EVERY"])
-    config["TEMPERATURE"]      = int(config["TEMPERATURE"])
+    config["TEMPERATURE"]      = float(config["TEMPERATURE"])
     return config
 
 
@@ -89,20 +89,32 @@ REGLAS GENERALES:
 - Nunca traduzcas comandos que comiencen con / (ej: /wave, /stretch).
 - Nunca traduzcas nombres propios de personajes, facciones, zonas o instancias del glosario.
 - Si un término no está en el glosario, mantenlo en inglés si es nombre propio.
-- Usa español neutro latinoamericano. Sin regionalismos."""
+- Usa español neutro latinoamericano. Sin regionalismos.
+- Mantén el tono fantástico y épico del original: no simplifiques ni modernices el
+  registro. Los NPC hablan con dicción propia de fantasía medieval (arcaísmos leves,
+  cortesía formal, giros poéticos cuando el original los tiene). Evita jerga moderna
+  o coloquialismos fuera de lugar.
+- Jamás repitas el texto en inglés como si fuera la traducción. Si no puedes traducir
+  una línea con certeza, traduce lo mejor posible; nunca la dejes igual al original."""
 
     specific = {
-        "duty_list":     "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Mantén nombres de NPCs, zonas e instancias sin traducir.\n- Texto breve y directo.",
-        "journal":       "TIPO: Diario de misión (Journal)\n- Tono narrativo, fluido y literario. Tercera persona o resumen de eventos.\n- Cohesión temporal: respeta el tiempo verbal del original.\n- Adapta expresiones idiomáticas a equivalentes naturales en español.",
-        "dialogues":     "TIPO: Diálogo de personaje\n- Preserva el tono y registro de cada personaje (formal/informal).\n- Sonido de doblaje profesional, no traducción literal.\n- Respeta puntuación original (puntos suspensivos, exclamaciones, etc.).",
-        "actions":       "TIPO: Acción de combate\n- Nombres: cortos, impactantes. Ej: \"Bloodbath\" → \"Baño de sangre\".\n- Descripciones: claras y precisas en términos de mecánica de juego.",
+        "duty_list":     "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Mantén nombres de NPCs, zonas e instancias sin traducir.\n- Texto breve y directo, sin perder el tono de aventura.",
+        "journal":       "TIPO: Diario de misión (Journal)\n- Tono narrativo, fluido y literario, como una crónica de aventuras. Tercera persona o resumen de eventos.\n- Cohesión temporal: respeta el tiempo verbal del original.\n- Adapta expresiones idiomáticas a equivalentes naturales en español, conservando el aire épico.",
+        "dialogues":     "TIPO: Diálogo de personaje\n- Preserva el tono, acento y registro de cada personaje (formal/informal, arcaico, rústico, etc.), tal como se percibe en el inglés original.\n- Sonido de doblaje profesional de fantasía, no traducción literal ni plana.\n- Respeta puntuación original (puntos suspensivos, exclamaciones, interrupciones, tartamudeos, etc.), pues suelen transmitir personalidad.",
+        "actions":       "TIPO: Acción de combate\n- Nombres: cortos, impactantes, con sabor a fantasía. Ej: \"Bloodbath\" → \"Baño de sangre\".\n- Descripciones: claras y precisas en términos de mecánica de juego.",
         "status_effects":"TIPO: Efecto de estado\n- Nombres concisos (1-3 palabras). HP/MP se mantienen igual.\n- Descripciones: explican claramente el efecto mecánico.",
         "traits":        "TIPO: Rasgo de clase\n- Nombres descriptivos y coherentes con la acción que mejoran.\n- Descripciones precisas sobre qué modifica el rasgo.",
         "ui":            "TIPO: Interfaz de usuario (UI)\n- Texto extremadamente conciso.\n- Botones en imperativo: \"Confirm\" → \"Confirmar\".\n- Preserva variables: {0}, {1}, %s exactamente igual.",
     }
 
     block = specific.get(file_type, "TIPO: Texto general de videojuego.")
-    return f"Eres un traductor profesional de videojuegos especializado en Final Fantasy XIV.\n\n{block}\n\n{base}"
+    return (
+        "Eres un traductor profesional de videojuegos especializado en Final Fantasy XIV, "
+        "con amplia experiencia en literatura de fantasía épica. Tu traducción debe sonar "
+        "como si perteneciera a una novela de fantasía profesional en español, nunca como "
+        "una traducción automática plana.\n\n"
+        f"{block}\n\n{base}"
+    )
 
 
 # ─────────────────────────────────────────────
@@ -112,10 +124,13 @@ REGLAS GENERALES:
 def call_ollama(prompt: str, system: str, cfg: dict) -> str:
     import requests
     url = cfg["OLLAMA_URL"].rstrip("/") + "/api/generate"
+    # Se une el system prompt al prompt en un único campo: algunos modelos servidos
+    # por Ollama ignoran o manejan mal el campo "system" separado en /api/generate,
+    # lo que producía traducciones idénticas al original (texto en inglés sin tocar).
+    full_prompt = f"{system}\n\n{prompt}"
     payload = {
         "model":  cfg["MODEL_NAME"],
-        "system": system,
-        "prompt": prompt,
+        "prompt": full_prompt,
         "stream": False,
         "options": {"temperature": cfg["TEMPERATURE"], "top_p": 0.9, "num_predict": 4096}
     }
@@ -145,7 +160,8 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
     def try_batch(items):
         numbered = "\n".join(f"{i+1}. {t}" for i, (_, t) in enumerate(items))
         prompt = (
-            f"Traduce las siguientes {len(items)} líneas de FFXIV al español neutro.\n"
+            f"Traduce las siguientes {len(items)} líneas de FFXIV al español neutro, "
+            f"manteniendo el tono fantástico y épico del original.\n"
             f"Responde ÚNICAMENTE en formato: N. [traducción]\n"
             f"Una línea por número. Sin explicaciones.\n\n{numbered}"
         )
@@ -157,7 +173,11 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
 
     def single(key, text):
         try:
-            return call_ollama(f"Traduce al español neutro:\n{text}", system_prompt, cfg)
+            out = call_ollama(
+                f"Traduce al español neutro, con tono fantástico y épico:\n{text}",
+                system_prompt, cfg
+            )
+            return out if out.strip() else text
         except Exception:
             return text
 
@@ -178,6 +198,11 @@ def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
 
     for (key, en), es in zip(entries, translated):
         if es.strip().lower() == en.strip().lower():
+            # El modelo devolvió el texto sin traducir: se reintenta individualmente
+            # una vez antes de aceptar la línea como está.
+            retry = single(key, en)
+            if retry.strip().lower() != en.strip().lower():
+                es = retry
             _log(log_path, batch_idx, [(key, en)], "identical_to_source", es)
         result[key] = es
     return result
@@ -283,12 +308,26 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
     if done_before:
         print(f"  Reanudando desde {done_before:,}/{total:,}...")
 
+    def write_partial_output():
+        """Escribe el _es.json parcial en cada llamada: mezcla lo ya traducido
+        con el texto en inglés para las claves aún pendientes, respetando el
+        orden original del archivo."""
+        ordered = {k: translated.get(k, en_data[k]) for k in en_data}
+        output_path.write_text(
+            json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    # Si ya existía progreso previo (checkpoint), reflejarlo de inmediato en el output
+    if done_before:
+        write_partial_output()
+
     forced_type = detect_file_type(input_path.name)
     pending     = [(k, v) for k, v in en_data.items()
                    if k not in translated and str(v).strip()]
 
     if not pending:
         print(f"  Ya completo ({total:,} entradas).")
+        write_partial_output()
         return
 
     print(f"  Pendientes: {len(pending):,} | Batches de {cfg['BATCH_SIZE']}")
@@ -312,18 +351,25 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
                 print(f"       {es_text[:60]}")
             print()
 
+    def run_batch(batch, system_prompt):
+        nonlocal batch_count, done_now
+        batch_count += 1
+        result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
+        translated.update(result)
+        done_now += len(batch)
+        preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
+        render_bar(done_now, preview)
+        # Guardado incremental: el _es.json se actualiza después de CADA batch,
+        # no solo al terminar el archivo completo.
+        write_partial_output()
+        if batch_count % checkpoint_every == 0:
+            save_checkpoint(ckpt, translated)
+
     if forced_type:
         system_prompt = build_system_prompt(forced_type, glossary_text)
         batches = [pending[i:i+batch_size] for i in range(0, len(pending), batch_size)]
         for batch in batches:
-            batch_count += 1
-            result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
-            translated.update(result)
-            done_now += len(batch)
-            preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
-            render_bar(done_now, preview)
-            if batch_count % checkpoint_every == 0:
-                save_checkpoint(ckpt, translated)
+            run_batch(batch, system_prompt)
     else:
         # Agrupar entradas consecutivas del mismo tipo
         groups: list[tuple[str, list]] = []
@@ -338,18 +384,10 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
             system_prompt = build_system_prompt(etype, glossary_text)
             batches = [entries[i:i+batch_size] for i in range(0, len(entries), batch_size)]
             for batch in batches:
-                batch_count += 1
-                result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
-                translated.update(result)
-                done_now += len(batch)
-                preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
-                render_bar(done_now, preview)
-                if batch_count % checkpoint_every == 0:
-                    save_checkpoint(ckpt, translated)
+                run_batch(batch, system_prompt)
 
-    # Guardar output final en orden original
-    ordered = {k: translated.get(k, en_data[k]) for k in en_data}
-    output_path.write_text(json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Guardado final (ya está actualizado por run_batch, pero se asegura consistencia)
+    write_partial_output()
 
     if ckpt.is_file():
         ckpt.unlink()
