@@ -103,8 +103,8 @@
     "Bo Bu": "Bo Bu",
     "Bo Gu": "Bo Gu",
     "Bertennant": "Bertennant",
-    "Mother Miounne": "Mother Miounne",
     "Miounne": "Miounne",
+    "Mother Miounne": "Mother Miounne",
     "Elder Seedseer": "Elder Seedseer",
     "Leonceault": "Leonceault",
     "Fufucha": "Fufucha",
@@ -621,5 +621,9 @@
     "desynthesis": "desynthesis",
     "demimateria": "demimateria",
     "Sightseeing log": "Sightseeing log"
+  },
+  "General": {
+    "wyrm": "dragón",
+    "salve": "bálsamo"
   }
 }

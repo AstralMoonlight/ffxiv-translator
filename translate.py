@@ -16,7 +16,7 @@ def load_config() -> dict:
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
         "BATCH_SIZE":       25,
         "CHECKPOINT_EVERY": 10,
-        "TEMPERATURE":      0.6,
+        "TEMPERATURE":      0,
     }
     env_path = Path(__file__).parent / "config.env"
     if env_path.is_file():
