@@ -14,7 +14,7 @@ def load_config() -> dict:
     config = {
         "OLLAMA_URL":       "http://localhost:11434",
         "MODEL_NAME":       "qwen2.5:14b-instruct-q4_K_M",
-        "BATCH_SIZE":       20,
+        "BATCH_SIZE":       25,
         "CHECKPOINT_EVERY": 10,
         "TEMPERATURE":      0.6,
     }
@@ -81,41 +81,37 @@ def build_system_prompt(file_type: str, glossary_text: str) -> str:
     base = f"""GLOSARIO OBLIGATORIO (aplica siempre, sin excepción):
 {glossary_text}
 
-REGLAS GENERALES:
+REGLAS ESTRICTAS DE LOCALIZACIÓN (¡NO TRADUZCAS LITERALMENTE!):
+- Estás haciendo LOCALIZACIÓN PROFESIONAL, no traducción palabra por palabra. 
+- Adapta modismos, dichos y expresiones al español neutro según el contexto (ej. "green adventurer" -> "aventurero novato", "bisoño" o "novicio"; NUNCA "aventurero verde").
+- Mantén un vocabulario rico, natural y con tono de fantasía épica.
+- Si encuentras términos propios de Final Fantasy XIV (ej. unidades de medida como ilm, yalm, malm) mantenlos intactos a menos que estén en el glosario.
 - Devuelve ÚNICAMENTE las líneas traducidas en el formato numerado indicado.
 - Sin explicaciones, notas, comentarios ni formato extra.
 - Nunca traduzcas comandos que comiencen con / (ej: /wave, /stretch).
-- Nunca traduzcas nombres propios de personajes, facciones, zonas o instancias del glosario.
-- Si un término no está en el glosario, mantenlo en inglés si es nombre propio.
-- Usa español neutro latinoamericano. Sin regionalismos.
-- Mantén el tono fantástico y épico del original: no simplifiques ni modernices el
-  registro. Los NPC hablan con dicción propia de fantasía medieval (arcaísmos leves,
-  cortesía formal, giros poéticos cuando el original los tiene). Evita jerga moderna
-  o coloquialismos fuera de lugar.
-- Jamás repitas el texto en inglés como si fuera la traducción. Si no puedes traducir
-  una línea con certeza, traduce lo mejor posible; nunca la dejes igual al original."""
+- Nunca traduzcas nombres propios de personajes, facciones o zonas si no están en el glosario. Mantenlos en inglés.
+- Jamás repitas el texto en inglés como si fuera la traducción."""
 
     specific = {
-        "duty_list":     "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Mantén nombres de NPCs, zonas e instancias sin traducir.\n- Texto breve y directo, sin perder el tono de aventura.",
-        "journal":       "TIPO: Diario de misión (Journal)\n- Tono narrativo, fluido y literario, como una crónica de aventuras. Tercera persona o resumen de eventos.\n- Cohesión temporal: respeta el tiempo verbal del original.\n- Adapta expresiones idiomáticas a equivalentes naturales en español, conservando el aire épico.",
-        "dialogues":     "TIPO: Diálogo de personaje\n- Preserva el tono, acento y registro de cada personaje (formal/informal, arcaico, rústico, etc.), tal como se percibe en el inglés original.\n- Sonido de doblaje profesional de fantasía, no traducción literal ni plana.\n- Respeta puntuación original (puntos suspensivos, exclamaciones, interrupciones, tartamudeos, etc.), pues suelen transmitir personalidad.",
+        "duty_list":     "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Texto breve y directo, sin perder el tono de aventura.",
+        "journal":       "TIPO: Diario de misión (Journal)\n- Tono narrativo, fluido y literario, como una crónica de aventuras. Tercera persona o resumen de eventos.\n- Adapta expresiones idiomáticas a equivalentes naturales en español.",
+        "dialogues":     "TIPO: Diálogo de personaje\n- Preserva el tono, acento y registro de cada personaje (formal/informal, arcaico, rústico, etc.).\n- Sonido de doblaje profesional de fantasía, NUNCA traducción literal. Fluye natural en español.\n- Respeta puntuación original (puntos suspensivos, exclamaciones, tartamudeos).",
         "actions":       "TIPO: Acción de combate\n- Nombres: cortos, impactantes, con sabor a fantasía. Ej: \"Bloodbath\" → \"Baño de sangre\".\n- Descripciones: claras y precisas en términos de mecánica de juego.",
         "status_effects":"TIPO: Efecto de estado\n- Nombres concisos (1-3 palabras). HP/MP se mantienen igual.\n- Descripciones: explican claramente el efecto mecánico.",
-        "traits":        "TIPO: Rasgo de clase\n- Nombres descriptivos y coherentes con la acción que mejoran.\n- Descripciones precisas sobre qué modifica el rasgo.",
-        "ui":            "TIPO: Interfaz de usuario (UI)\n- Texto extremadamente conciso.\n- Botones en imperativo: \"Confirm\" → \"Confirmar\".\n- Preserva variables: {0}, {1}, %s exactamente igual.",
+        "traits":        "TIPO: Rasgo de clase\n- Nombres descriptivos y coherentes con la acción que mejoran.",
+        "ui":            "TIPO: Interfaz de usuario (UI)\n- Texto extremadamente conciso.\n- Preserva variables: {0}, {1}, %s exactamente igual.",
     }
 
     block = specific.get(file_type, "TIPO: Texto general de videojuego.")
     return (
-        "Eres un traductor profesional de videojuegos especializado en Final Fantasy XIV, "
-        "con amplia experiencia en literatura de fantasía épica. Tu traducción debe sonar "
-        "como si perteneciera a una novela de fantasía profesional en español, nunca como "
-        "una traducción automática plana.\n\n"
+        "Eres un experto en localización de videojuegos trabajando en Final Fantasy XIV. "
+        "Tu objetivo es que el texto suene como si hubiera sido escrito originalmente en español, "
+        "propio de una novela de fantasía épica, evitando calcos del inglés y traducciones literales torpes.\n\n"
         f"{block}\n\n{base}"
     )
 
 # ─────────────────────────────────────────────
-# Ollama (Actualizado con urllib y diagnósticos)
+# Ollama
 # ─────────────────────────────────────────────
 
 def call_ollama(prompt: str, system: str, cfg: dict) -> str:
@@ -160,7 +156,7 @@ def parse_numbered(response: str, expected: int) -> list[str] | None:
     return lines if len(lines) == expected else None
 
 # ─────────────────────────────────────────────
-# Batch con fallback (Actualizado con diagnósticos)
+# Batch con fallback
 # ─────────────────────────────────────────────
 
 def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
