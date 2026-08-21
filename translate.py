@@ -53,33 +53,46 @@ def detect_file_type(filename: str) -> str | None:
     return None
 
 # ─────────────────────────────────────────────
-# Glosario
+# Glosario Dinámico
 # ─────────────────────────────────────────────
 
-def load_glossary(glossary_path: Path) -> str:
+def load_glossary(glossary_path: Path) -> dict:
+    """Carga el glosario como diccionario en lugar de texto plano."""
     if not glossary_path.is_file():
-        return "No se proporcionaron términos específicos. Mantén todos los nombres propios intactos."
+        return {}
     try:
-        data = json.loads(glossary_path.read_text(encoding="utf-8"))
-        lines = []
-        for category, mapping in data.items():
-            for src, tgt in mapping.items():
+        return json.loads(glossary_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  [Error] Glosario: {e}")
+        return {}
+
+def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
+    """Filtra el glosario para inyectar solo los términos presentes en el batch actual."""
+    if not glossary_data:
+        return "No hay términos específicos para este bloque."
+        
+    combined_text = " ".join(str(t) for t in text_batch).lower()
+    lines = []
+    
+    for category, mapping in glossary_data.items():
+        for src, tgt in mapping.items():
+            if src.lower() in combined_text:
                 if src != tgt:
                     lines.append(f'- "{src}" → "{tgt}"')
                 else:
                     lines.append(f'- "{src}" → NO TRADUCIR')
-        return "\n".join(lines)
-    except Exception as e:
-        print(f"  [Error] Glosario: {e}")
-        return ""
+                    
+    if not lines:
+        return "No hay términos del glosario en este bloque. Traduce normalmente."
+    return "\n".join(lines)
 
 # ─────────────────────────────────────────────
 # System prompts
 # ─────────────────────────────────────────────
 
-def build_system_prompt(file_type: str, glossary_text: str) -> str:
-    base = f"""GLOSARIO OBLIGATORIO (aplica siempre, sin excepción):
-{glossary_text}
+def build_system_prompt(file_type: str, relevant_glossary: str) -> str:
+    base = f"""GLOSARIO PARA ESTE TEXTO (aplica siempre, sin excepción):
+{relevant_glossary}
 
 REGLAS ESTRICTAS DE LOCALIZACIÓN (¡NO TRADUZCAS LITERALMENTE!):
 - Estás haciendo LOCALIZACIÓN PROFESIONAL, no traducción palabra por palabra. 
@@ -159,9 +172,16 @@ def parse_numbered(response: str, expected: int) -> list[str] | None:
 # Batch con fallback
 # ─────────────────────────────────────────────
 
-def translate_batch(entries, system_prompt, cfg, log_path, batch_idx) -> dict:
+def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx) -> dict:
+    
+    # Preparamos el system prompt dinámico para todo este batch
+    text_lines = [t for _, t in entries]
+    relevant_glossary = get_relevant_glossary(text_lines, glossary_data)
+    system_prompt = build_system_prompt(file_type, relevant_glossary)
+    
     def try_batch(items):
-        numbered = "\n".join(f"{i+1}. {t}" for i, (_, t) in enumerate(items))
+        item_texts = [t for _, t in items]
+        numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(item_texts))
         prompt = (
             f"Traduce las siguientes {len(items)} líneas de FFXIV al español neutro, "
             f"manteniendo el tono fantástico y épico del original.\n"
@@ -288,7 +308,7 @@ def get_file_progress(input_path: Path) -> tuple[int, int]:
 # Traducción de un archivo
 # ─────────────────────────────────────────────
 
-def translate_file(input_path: Path, cfg: dict, glossary_text: str):
+def translate_file(input_path: Path, cfg: dict, glossary_data: dict):
     base = Path(__file__).parent
     try:
         rel = input_path.relative_to(base / "input")
@@ -348,10 +368,10 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
                 print(f"       {es_text[:60]}")
             print()
 
-    def run_batch(batch, system_prompt):
+    def run_batch(batch, file_type):
         nonlocal batch_count, done_now
         batch_count += 1
-        result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
+        result = translate_batch(batch, file_type, glossary_data, cfg, log_path, batch_count)
         translated.update(result)
         done_now += len(batch)
         preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
@@ -361,10 +381,9 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
             save_checkpoint(ckpt, translated)
 
     if forced_type:
-        system_prompt = build_system_prompt(forced_type, glossary_text)
         batches = [pending[i:i+batch_size] for i in range(0, len(pending), batch_size)]
         for batch in batches:
-            run_batch(batch, system_prompt)
+            run_batch(batch, forced_type)
     else:
         groups: list[tuple[str, list]] = []
         for key, text in pending:
@@ -375,10 +394,9 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
                 groups.append((etype, [(key, text)]))
 
         for etype, entries in groups:
-            system_prompt = build_system_prompt(etype, glossary_text)
             batches = [entries[i:i+batch_size] for i in range(0, len(entries), batch_size)]
             for batch in batches:
-                run_batch(batch, system_prompt)
+                run_batch(batch, etype)
 
     write_partial_output()
 
@@ -436,7 +454,7 @@ def build_menu_items(input_root: Path) -> list[dict]:
 
     return items
 
-def show_menu(cfg: dict, input_root: Path, glossary_text: str):
+def show_menu(cfg: dict, input_root: Path, glossary_data: dict):
     try:
         import questionary
         from questionary import Choice
@@ -535,7 +553,7 @@ def show_menu(cfg: dict, input_root: Path, glossary_text: str):
                 rel = fpath.name
             print(f"  [{i}/{len(pending_files)}] {rel}")
             try:
-                translate_file(fpath, cfg, glossary_text)
+                translate_file(fpath, cfg, glossary_data)
             except KeyboardInterrupt:
                 print("\n\n  Interrumpido. Checkpoint guardado.")
                 input("  [Enter para volver al menú]")
@@ -563,7 +581,7 @@ def main():
         cfg["MODEL_NAME"] = args.model
 
     glossary_path = Path(__file__).parent / "glossary.json"
-    glossary_text = load_glossary(glossary_path)
+    glossary_data = load_glossary(glossary_path)
     input_root    = Path(__file__).parent / "input"
 
     print(f"\n  Modelo : {cfg['MODEL_NAME']}")
@@ -579,7 +597,7 @@ def main():
                 rel = fpath.name
             print(f"  [{i}/{len(files)}] {rel}")
             try:
-                translate_file(fpath, cfg, glossary_text)
+                translate_file(fpath, cfg, glossary_data)
             except KeyboardInterrupt:
                 print("\n  Interrumpido.")
                 return
@@ -588,7 +606,7 @@ def main():
             print()
         print("  Traducción finalizada.")
     else:
-        show_menu(cfg, input_root, glossary_text)
+        show_menu(cfg, input_root, glossary_data)
 
 if __name__ == "__main__":
     main()
