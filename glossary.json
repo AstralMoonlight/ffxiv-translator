@@ -621,5 +621,12 @@
     "desynthesis": "desynthesis",
     "demimateria": "demimateria",
     "Sightseeing log": "Sightseeing log"
+  },
+  "General": {
+    "Elder Seedseer": "Venerable Semividente",
+    "Guild of Adventurers": "Gremio de Aventureros",
+    "Warriors of Light": "Guerreros de la Luz",
+    "wyrm": "dragón",
+    "square malm": "malm cuadrado"
   }
 }
