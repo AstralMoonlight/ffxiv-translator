@@ -298,21 +298,30 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
     batch_count      = 0
     done_now         = 0
 
-    def render_bar(done_now):
+    def render_bar(done_now, last_batch=None):
         total_done = done_before + done_now
         pct   = (total_done / total) * 100
         bar_f = int(pct / 2)
         bar   = "#" * bar_f + "." * (50 - bar_f)
-        print(f"\r  [{bar}] {pct:5.1f}%  {total_done:,}/{total:,}", end="", flush=True)
+        print(f"  [{bar}] {pct:5.1f}%  {total_done:,}/{total:,}")
+        if last_batch:
+            for key, en_text, es_text in last_batch:
+                tipo = detect_entry_type(key)
+                tag  = {"journal": "JRN", "duty_list": "TODO", "dialogues": "DLG"}.get(tipo, "???")
+                print(f"  [{tag}] {en_text[:60]}")
+                print(f"       {es_text[:60]}")
+            print()
 
     if forced_type:
         system_prompt = build_system_prompt(forced_type, glossary_text)
         batches = [pending[i:i+batch_size] for i in range(0, len(pending), batch_size)]
         for batch in batches:
             batch_count += 1
-            translated.update(translate_batch(batch, system_prompt, cfg, log_path, batch_count))
+            result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
+            translated.update(result)
             done_now += len(batch)
-            render_bar(done_now)
+            preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
+            render_bar(done_now, preview)
             if batch_count % checkpoint_every == 0:
                 save_checkpoint(ckpt, translated)
     else:
@@ -330,9 +339,11 @@ def translate_file(input_path: Path, cfg: dict, glossary_text: str):
             batches = [entries[i:i+batch_size] for i in range(0, len(entries), batch_size)]
             for batch in batches:
                 batch_count += 1
-                translated.update(translate_batch(batch, system_prompt, cfg, log_path, batch_count))
+                result = translate_batch(batch, system_prompt, cfg, log_path, batch_count)
+                translated.update(result)
                 done_now += len(batch)
-                render_bar(done_now)
+                preview = [(k, en_data[k], result[k]) for k, _ in batch[:3] if k in result]
+                render_bar(done_now, preview)
                 if batch_count % checkpoint_every == 0:
                     save_checkpoint(ckpt, translated)
 
