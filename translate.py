@@ -88,35 +88,66 @@ def get_relevant_glossary(text_batch: list[str], glossary_data: dict) -> str:
 # System prompts
 # ─────────────────────────────────────────────
 
-def build_system_prompt(file_type: str, relevant_glossary: str) -> str:
-    base = f"""GLOSARIO PARA ESTE TEXTO (aplica siempre, reemplazo exacto):
-{relevant_glossary}
+def build_proper_noun_fence(glossary_data: dict) -> str:
+    """
+    Construye una lista explícita de sustantivos propios que el modelo NO debe tocar.
+    Se extraen las categorías que representan nombres, lugares, facciones y entidades
+    cuyo valor en el glosario es idéntico a la clave (= se mantienen sin traducir).
+    """
+    protected_categories = {
+        "characters", "factions_and_organizations",
+        "key_locations_and_dungeons", "races_and_entities",
+        "game_commands_and_emotes",
+    }
+    names: list[str] = []
+    for cat, mapping in glossary_data.items():
+        if cat not in protected_categories:
+            continue
+        for src, tgt in mapping.items():
+            # Solo incluir los que se mantienen igual (no hay traducción especial)
+            if src.strip() == tgt.strip():
+                names.append(src)
+    if not names:
+        return ""
+    # Limitar la lista para no saturar el contexto; los más cortos son los más peligrosos
+    names_sorted = sorted(names, key=len)
+    sample = names_sorted[:120]
+    return (
+        "SUSTANTIVOS PROPIOS INTOCABLES (copia el texto original, no traduzcas ni adaptes):\n"
+        + ", ".join(f'"{n}"' for n in sample)
+    )
 
-REGLAS ESTRICTAS DE LOCALIZACIÓN:
-- Estás haciendo LOCALIZACIÓN PROFESIONAL, no traducción palabra por palabra. 
-- Adapta modismos, dichos y expresiones al español neutro según el contexto.
-- Mantén un vocabulario rico, natural y con tono de fantasía épica.
-- Devuelve ÚNICAMENTE las líneas traducidas en el formato numerado indicado.
-- Sin explicaciones, notas, comentarios ni formato extra.
-- Nunca traduzcas comandos que comiencen con / (ej: /wave, /stretch).
-- Nunca traduzcas nombres propios de personajes, facciones o zonas si no están en el glosario. Mantenlos en inglés.
-- Jamás repitas el texto en inglés como si fuera la traducción."""
+
+def build_system_prompt(file_type: str, relevant_glossary: str, proper_noun_fence: str = "") -> str:
+    proper_block = f"\n\n{proper_noun_fence}" if proper_noun_fence else ""
+
+    base = f"""GLOSARIO OBLIGATORIO PARA ESTE BLOQUE (reemplazo exacto, sin excepción):
+{relevant_glossary}
+{proper_block}
+
+REGLAS DE LOCALIZACIÓN — JERARQUÍA ESTRICTA:
+1. GLOSARIO PRIMERO: Si una palabra aparece en el glosario, usa la traducción del glosario. Sin variaciones, sin paráfrasis.
+2. SUSTANTIVOS PROPIOS: Nombres de personajes, lugares, facciones, razas y términos del juego que NO aparecen en el glosario se copian en inglés tal como están. NUNCA los inventes ni los traduzcas.
+3. TEXTO TRADUCIBLE: Solo traduce el texto narrativo/descriptivo que no sea un sustantivo propio.
+4. COMANDOS: Nunca traduzcas comandos que empiecen con / (ej: /wave, /stretch).
+5. VARIABLES: Preserva {"{0}"}, {"{1}"}, %s, <nombre>, <clase> y cualquier placeholder exactamente igual.
+6. FORMATO: Devuelve ÚNICAMENTE las líneas traducidas en el formato numerado indicado. Sin explicaciones, notas ni texto extra.
+7. ANTI-INVENCIÓN: Si no estás seguro del significado de un término propio, mantenlo en inglés. No adivines."""
 
     specific = {
-        "duty_list":     "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Texto breve y directo, sin perder el tono de aventura.",
-        "journal":       "TIPO: Diario de misión (Journal)\n- Tono narrativo, fluido y literario, como una crónica de aventuras. Tercera persona o resumen de eventos.\n- Adapta expresiones idiomáticas a equivalentes naturales en español.",
-        "dialogues":     "TIPO: Diálogo de personaje\n- Preserva el tono, acento y registro de cada personaje (formal/informal, arcaico, rústico, etc.).\n- Sonido de doblaje profesional de fantasía, NUNCA traducción literal. Fluye natural en español.\n- Respeta puntuación original (puntos suspensivos, exclamaciones, tartamudeos).",
-        "actions":       "TIPO: Acción de combate\n- Nombres: cortos, impactantes, con sabor a fantasía. Ej: \"Bloodbath\" → \"Baño de sangre\".\n- Descripciones: claras y precisas en términos de mecánica de juego.",
-        "status_effects":"TIPO: Efecto de estado\n- Nombres concisos (1-3 palabras). HP/MP se mantienen igual.\n- Descripciones: explican claramente el efecto mecánico.",
-        "traits":        "TIPO: Rasgo de clase\n- Nombres descriptivos y coherentes con la acción que mejoran.",
-        "ui":            "TIPO: Interfaz de usuario (UI)\n- Texto extremadamente conciso.\n- Preserva variables: {0}, {1}, %s exactamente igual.",
+        "duty_list":      "TIPO: Objetivo de misión (Duty List)\n- Imperativo conciso: \"Speak with\" → \"Habla con\", \"Find\" → \"Busca a\", \"Head to\" → \"Dirígete a\".\n- Breve y directo.",
+        "journal":        "TIPO: Diario de misión (Journal)\n- Tono narrativo y fluido, como una crónica de aventuras.\n- Adapta expresiones idiomáticas al español neutro.",
+        "dialogues":      "TIPO: Diálogo de personaje\n- Preserva el tono y registro de cada personaje (formal/informal, arcaico, rústico).\n- Doblaje natural de fantasía épica. Respeta puntuación original (elipsis, exclamaciones, tartamudeos).",
+        "actions":        "TIPO: Acción de combate\n- Nombres: cortos e impactantes. Descripciones: claras en términos de mecánica de juego.",
+        "status_effects": "TIPO: Efecto de estado\n- Nombres concisos (1-3 palabras). HP/MP se mantienen igual.",
+        "traits":         "TIPO: Rasgo de clase\n- Nombres descriptivos y coherentes.",
+        "ui":             "TIPO: Interfaz de usuario (UI)\n- Texto extremadamente conciso. Preserva todas las variables y placeholders.",
     }
 
     block = specific.get(file_type, "TIPO: Texto general de videojuego.")
     return (
-        "Eres un experto en localización de videojuegos trabajando en Final Fantasy XIV. "
-        "Tu objetivo es que el texto suene como si hubiera sido escrito originalmente en español, "
-        "propio de una novela de fantasía épica, evitando calcos del inglés y traducciones literales torpes.\n\n"
+        "Eres un locutor de videojuegos especializado en Final Fantasy XIV trabajando en la localización al español neutro. "
+        "Tu prioridad es fidelidad: el texto debe sonar natural en español SIN inventar términos ni alterar nombres propios del universo FFXIV.\n\n"
         f"{block}\n\n{base}"
     )
 
@@ -165,6 +196,57 @@ def parse_numbered(response: str, expected: int) -> list[str] | None:
             lines.append(m.group(1).strip())
     return lines if len(lines) == expected else None
 
+
+# ─────────────────────────────────────────────
+# Post-procesado: restaurar sustantivos propios
+# ─────────────────────────────────────────────
+
+def build_restoration_map(glossary_data: dict) -> dict[str, str]:
+    """
+    Construye un mapa de variantes incorrectas → forma correcta para los términos
+    que deben mantenerse igual en inglés (src == tgt en el glosario).
+
+    Estrategia: detecta variantes en minúsculas para hacer la búsqueda case-insensitive,
+    y restaura la forma canónica definida en el glosario.
+    """
+    protected_categories = {
+        "characters", "factions_and_organizations",
+        "key_locations_and_dungeons", "races_and_entities",
+        "game_commands_and_emotes",
+    }
+    restoration: dict[str, str] = {}
+    for cat, mapping in glossary_data.items():
+        if cat not in protected_categories:
+            continue
+        for src, tgt in mapping.items():
+            # Registrar la forma canónica para búsqueda posterior
+            restoration[src.lower()] = tgt
+    return restoration
+
+
+def restore_proper_nouns(text: str, restoration_map: dict[str, str]) -> str:
+    """
+    Recorre el texto y reemplaza sustantivos propios alterados por su forma canónica.
+    Opera con regex de palabras para evitar reemplazos parciales dentro de otras palabras.
+
+    Solo restaura términos que el modelo haya modificado en capitalización o grafía menor;
+    no puede detectar traducciones completamente inventadas (eso se maneja en el prompt).
+    """
+    if not restoration_map:
+        return text
+
+    # Ordenar por longitud descendente para priorizar matches más largos (ej: "G'raha Tia" antes que "G'raha")
+    for canonical_lower, canonical in sorted(restoration_map.items(), key=lambda x: -len(x[0])):
+        # Buscar el término de forma case-insensitive en el texto
+        pattern = re.compile(re.escape(canonical_lower), re.IGNORECASE)
+        # Solo reemplazar si la versión encontrada difiere de la canónica
+        def replacer(m: re.Match) -> str:
+            found = m.group(0)
+            return canonical if found != canonical else found
+        text = pattern.sub(replacer, text)
+    
+    return text
+
 # ─────────────────────────────────────────────
 # Batch con fallback
 # ─────────────────────────────────────────────
@@ -174,16 +256,17 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
     # Preparamos el system prompt dinámico para todo este batch
     text_lines = [t for _, t in entries]
     relevant_glossary = get_relevant_glossary(text_lines, glossary_data)
-    system_prompt = build_system_prompt(file_type, relevant_glossary)
+    proper_noun_fence = build_proper_noun_fence(glossary_data)
+    system_prompt = build_system_prompt(file_type, relevant_glossary, proper_noun_fence)
     
     def try_batch(items):
         item_texts = [t for _, t in items]
         numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(item_texts))
         prompt = (
-            f"Traduce las siguientes {len(items)} líneas de FFXIV al español neutro, "
-            f"manteniendo el tono fantástico y épico del original.\n"
+            f"Traduce las siguientes {len(items)} líneas de FFXIV al español neutro.\n"
+            f"IMPORTANTE: Mantén todos los nombres propios de personajes, lugares y facciones exactamente como aparecen.\n"
             f"Responde ÚNICAMENTE en formato: N. [traducción]\n"
-            f"Una línea por número. Sin explicaciones.\n\n{numbered}"
+            f"Una línea por número. Sin explicaciones ni texto adicional.\n\n{numbered}"
         )
         try:
             raw = call_ollama(prompt, system_prompt, cfg)
@@ -196,15 +279,24 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
             return None
 
     def single(key, text):
+        # El fallback también usa el mismo system_prompt con todas las reglas
         try:
             out = call_ollama(
-                f"Traduce al español neutro, con tono fantástico y épico:\n{text}",
+                f"Traduce al español neutro esta línea de FFXIV. "
+                f"Mantén los nombres propios sin cambiar. Devuelve solo la traducción:\n{text}",
                 system_prompt, cfg
             )
             return out if out.strip() else text
         except Exception as e:
             print(f"\n[ERROR EN SINGLE]: {e}")
             return text
+
+    # Mapa de restauración de sustantivos propios para post-procesado
+    restoration_map = build_restoration_map(glossary_data)
+
+    def postprocess(es: str) -> str:
+        """Aplica correcciones post-traducción: restaura sustantivos propios alterados."""
+        return restore_proper_nouns(es, restoration_map)
 
     result = {}
     translated = try_batch(entries)
@@ -220,12 +312,13 @@ def translate_batch(entries, file_type, glossary_data, cfg, log_path, batch_idx)
     if translated is None:
         _log(log_path, batch_idx, entries, "batch_failed_fallback_individual")
         for key, text in entries:
-            result[key] = single(key, text)
+            result[key] = postprocess(single(key, text))
         return result
 
     for (key, en), es in zip(entries, translated):
+        es = postprocess(es)
         if es.strip().lower() == en.strip().lower():
-            retry = single(key, en)
+            retry = postprocess(single(key, en))
             if retry.strip().lower() != en.strip().lower():
                 es = retry
             _log(log_path, batch_idx, [(key, en)], "identical_to_source", es)
